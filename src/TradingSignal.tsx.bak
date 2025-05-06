@@ -1,0 +1,1769 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { 
+  ArrowUp, ArrowDown, X, Check, RefreshCw, BarChart2, AlertTriangle, ChevronDown, 
+  Settings, Info, TrendingUp, TrendingDown, DollarSign, Clock, Percent, Activity, 
+  Target, Zap, Layers, Moon, Sun, Bell, Share2, Save, Maximize2
+} from 'lucide-react';
+import { createChart, IChartApi, ISeriesApi, CandlestickData, SeriesType } from 'lightweight-charts';
+import { useSwipeable } from 'react-swipeable';
+import useSWR from 'swr';
+import styles from './TradingSignal.module.css';
+
+// Types
+type SectionKey = 'entryLevels' | 'technicalIndicators' | 'marketData' | 'orderFlow' | 'positionSizing';
+
+type MarketData = {
+  price: number;
+  priceChangePercent: number;
+  high24h: number;
+  low24h: number;
+  volume: number;
+  lastUpdate: Date | null;
+};
+
+type Analytics = {
+  rsi: {[timeframe: string]: number};
+  ema: {[timeframe: string]: number};
+  macd: {
+    line: number;
+    signal: number;
+    histogram: number;
+  };
+  bb: {
+    upper: number;
+    middle: number;
+    lower: number;
+    width?: number;
+  };
+  vwap: number;
+  entryRangeLow: number;
+  entryRangeHigh: number;
+  stopLoss: number;
+  takeProfitOne: number;
+  takeProfitTwo: number;
+  whaleFlow: string;
+  rvol: string;
+  deltaVolume: number;
+  orderBookPressure: string;
+  takerFlowAggression: string;
+  fundingRate: string;
+  fundingTrend: string;
+  oiDelta: string;
+  atrVolatility: number;
+  confidence: number;
+  trends: { [key: string]: boolean };
+  support4h: number[];
+  support1d: number[];
+  liquidations: { buy: number; sell: number };
+  riskRewardRatio: { r1: number; r2: number };
+  signalStrength: number;
+  lastSignalTime: Date | null;
+  divergence?: {
+    rsi: { bullish: boolean; bearish: boolean };
+    macd: { bullish: boolean; bearish: boolean };
+  };
+  marketRegime?: string;
+  valueArea?: {
+    high: number;
+    low: number;
+    poc: number;
+  };
+};
+
+type Alert = {
+  id: number;
+  symbol: string;
+  message: string;
+  type: 'info' | 'success' | 'warning' | 'error';
+  time: Date;
+  read: boolean;
+};
+
+type TradeHistoryItem = {
+  id: number;
+  symbol: string;
+  type: 'LONG' | 'SHORT';
+  entryPrice: number;
+  exitPrice: number | null;
+  stopLoss: number;
+  takeProfit: number;
+  quantity: number;
+  status: 'open' | 'closed' | 'stopped';
+  pnl: number | null;
+  pnlPercent: number | null;
+  openTime: Date;
+  closeTime: Date | null;
+};
+
+type ExchangePrice = {
+  binance: number;
+  coinbase: number;
+  bybit: number;
+  difference: number;
+};
+
+// Utility Classes
+class APIRateLimiter {
+  private maxRequests: number;
+  private timeWindow: number;
+  private requestTimestamps: number[];
+
+  constructor(maxRequests = 10, timeWindow = 1000) {
+    this.maxRequests = maxRequests;
+    this.timeWindow = timeWindow;
+    this.requestTimestamps = [];
+  }
+  
+  async throttle() {
+    const now = Date.now();
+    this.requestTimestamps = this.requestTimestamps.filter(
+      timestamp => now - timestamp < this.timeWindow
+    );
+    
+    if (this.requestTimestamps.length >= this.maxRequests) {
+      const oldestRequest = this.requestTimestamps[0];
+      const waitTime = this.timeWindow - (now - oldestRequest);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    
+    this.requestTimestamps.push(Date.now());
+  }
+  
+  async fetch(url: string, options = {}) {
+    await this.throttle();
+    return fetch(url, options);
+  }
+}
+
+class CircuitBreaker {
+  private request: Function;
+  private state: 'CLOSED' | 'OPEN' | 'HALF-OPEN';
+  private failureCount: number;
+  private resetTimeout: number;
+  private failureThreshold: number;
+  private lastFailureTime: number | null;
+
+  constructor(request: Function, options: { resetTimeout?: number, failureThreshold?: number } = {}) {
+    this.request = request;
+    this.state = 'CLOSED';
+    this.failureCount = 0;
+    this.resetTimeout = options.resetTimeout || 30000;
+    this.failureThreshold = options.failureThreshold || 5;
+    this.lastFailureTime = null;
+  }
+  
+  // args type is unknown due to generic request signature; if you know the request signature, replace 'unknown[]' with specific types
+async fire(...args: unknown[]): Promise<unknown> {
+    if (this.state === 'OPEN') {
+      if (this.lastFailureTime && Date.now() - this.lastFailureTime > this.resetTimeout) {
+        this.state = 'HALF-OPEN';
+      } else {
+        throw new Error('Circuit is OPEN');
+      }
+    }
+    
+    try {
+      const response = await this.request(...args);
+      
+      if (this.state === 'HALF-OPEN') {
+        this.reset();
+      }
+      
+      return response;
+    } catch (error) {
+      this.failureCount++;
+      this.lastFailureTime = Date.now();
+      
+      if (this.failureCount >= this.failureThreshold || this.state === 'HALF-OPEN') {
+        this.state = 'OPEN';
+      }
+      
+      throw error;
+    }
+  }
+  
+  reset() {
+    this.failureCount = 0;
+    this.state = 'CLOSED';
+  }
+}
+
+// Main Component
+const TradingSignal: React.FC = (): React.ReactElement => {
+  // API Rate Limiters
+  const binanceRateLimiter = useRef(new APIRateLimiter(10, 1000));
+
+  // Supported trading pairs
+  const supportedPairs = [
+    { symbol: 'BTCUSDT', name: 'Bitcoin' },
+    { symbol: 'THETAUSDT', name: 'Theta' },
+    { symbol: 'SOLUSDT', name: 'Solana' },
+    { symbol: 'ETHUSDT', name: 'Ethereum' },
+    { symbol: 'BNBUSDT', name: 'BNB' },
+    { symbol: 'DOGEUSDT', name: 'Dogecoin' },
+    { symbol: 'ADAUSDT', name: 'Cardano' },
+    { symbol: 'XRPUSDT', name: 'Ripple' }
+  ];
+
+  // State variables
+  const [selectedSymbol, setSelectedSymbol] = useState('BTCUSDT');
+  const [signalType, setSignalType] = useState<'LONG' | 'SHORT'>('LONG');
+  const [activeTab, setActiveTab] = useState('overview');
+  const [expandedSections, setExpandedSections] = useState<Record<SectionKey, boolean>>({
+    entryLevels: true,
+    technicalIndicators: false,
+    marketData: false,
+    orderFlow: false,
+    positionSizing: false,
+  });
+  
+  const [marketData, setMarketData] = useState<MarketData>({
+    price: 0,
+    priceChangePercent: 0,
+    high24h: 0,
+    low24h: 0,
+    volume: 0,
+    lastUpdate: null,
+  });
+  
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('theme');
+    return (saved as 'light' | 'dark') || 'dark';
+  });
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [showAlerts, setShowAlerts] = useState(false);
+  const [accountSize, setAccountSize] = useState<number>(() => {
+    const saved = localStorage.getItem('accountSize');
+    return saved ? parseFloat(saved) : 10000;
+  });
+  const [riskPercentage, setRiskPercentage] = useState<number>(() => {
+    const saved = localStorage.getItem('riskPercentage');
+    return saved ? parseFloat(saved) : 1;
+  });
+  const [exchangePrices, setExchangePrices] = useState<ExchangePrice>({
+    binance: 0,
+    coinbase: 0,
+    bybit: 0,
+    difference: 0
+  });
+  const [tradeHistory, setTradeHistory] = useState<TradeHistoryItem[]>(() => {
+    const saved = localStorage.getItem('tradeHistory');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [watchlist, setWatchlist] = useState<string[]>(() => {
+    const saved = localStorage.getItem('watchlist');
+    return saved ? JSON.parse(saved) : ['BTCUSDT', 'ETHUSDT', 'BNBUSDT'];
+  });
+  const [availableTimeframes, setAvailableTimeframes] = useState([
+    { value: '1m', label: '1m' },
+    { value: '5m', label: '5m' },
+    { value: '15m', label: '15m' },
+    { value: '1h', label: '1h' },
+    { value: '4h', label: '4h' },
+    { value: '1d', label: '1d' }
+  ]);
+  const [selectedTimeframes, setSelectedTimeframes] = useState(['5m', '15m', '1h', '4h', '1d']);
+  const [showFullscreenChart, setShowFullscreenChart] = useState(false);
+  
+  // Refs
+  const wsRef = useRef<WebSocket | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const chartContainerRef = useRef<HTMLDivElement | null>(null);
+  const fullscreenChartContainerRef = useRef<HTMLDivElement | null>(null);
+  const previousSignalStrengthRef = useRef<number>(0);
+  
+  const historicalDataRef = useRef<{
+    prices: {[timeframe: string]: number[][]},
+    volumes: {[timeframe: string]: number[]},
+  }>({
+    prices: {
+      '1m': [],
+      '5m': [],
+      '15m': [],
+      '1h': [],
+      '4h': [],
+      '1d': [],
+    },
+    volumes: {
+      '1m': [],
+      '5m': [],
+      '15m': [],
+      '1h': [],
+      '4h': [],
+      '1d': [],
+    }
+  });
+
+  // Initial analytics data
+  const [pairAnalytics, setPairAnalytics] = useState<Record<string, Analytics>>({
+    'BTCUSDT': {
+      rsi: {'5m': 42.18, '15m': 45.32, '1h': 47.65, '4h': 51.23, '1d': 55.78},
+      ema: {'5m': 63150.45, '15m': 63180.75, '1h': 63250.45, '4h': 62980.75, '1d': 62750.25},
+      macd: {
+        line: 120.5,
+        signal: 110.2,
+        histogram: 10.3
+      },
+      bb: {
+        upper: 64500.25,
+        middle: 63250.45,
+        lower: 62000.65,
+        width: 0.039
+      },
+      vwap: 63180.35,
+      entryRangeLow: 62850.50,
+      entryRangeHigh: 63350.25,
+      stopLoss: 62100.00,
+      takeProfitOne: 64200.00,
+      takeProfitTwo: 65500.00,
+      whaleFlow: 'Inflow > Outflow',
+      rvol: '1.25x',
+      deltaVolume: 2458.32,
+      orderBookPressure: '2.15x',
+      takerFlowAggression: '62.38%',
+      fundingRate: '0.0021%',
+      fundingTrend: '0.0018%',
+      oiDelta: '0.12%',
+      atrVolatility: 1250.50,
+      confidence: 82,
+      trends: { '5m': true, '15m': true, '1h': true, '4h': true, '1d': false },
+      support4h: [61200, 64800],
+      support1d: [58500, 66500],
+      liquidations: { buy: 1250000, sell: 850000 },
+      riskRewardRatio: { r1: 2.1, r2: 3.4 },
+      signalStrength: 78,
+      lastSignalTime: new Date(Date.now() - 1800000), // 30 minutes ago
+      divergence: {
+        rsi: { bullish: false, bearish: false },
+        macd: { bullish: true, bearish: false }
+      },
+      marketRegime: 'trending',
+      valueArea: {
+        high: 64200,
+        low: 62500,
+        poc: 63150
+      }
+    },
+    // Other pairs data...
+    'THETAUSDT': {
+      rsi: {'5m': 58.75, '15m': 56.32, '1h': 54.65, '4h': 52.23, '1d': 48.78},
+      ema: {'5m': 1.448, '15m': 1.450, '1h': 1.452, '4h': 1.438, '1d': 1.425},
+      macd: {
+        line: 0.003,
+        signal: 0.001,
+        histogram: 0.002
+      },
+      bb: {
+        upper: 1.52,
+        middle: 1.45,
+        lower: 1.38,
+        width: 0.096
+      },
+      vwap: 1.447,
+      entryRangeLow: 1.425,
+      entryRangeHigh: 1.465,
+      stopLoss: 1.38,
+      takeProfitOne: 1.52,
+      takeProfitTwo: 1.58,
+      whaleFlow: 'Inflow > Outflow',
+      rvol: '1.85x',
+      deltaVolume: 1258432.45,
+      orderBookPressure: '1.72x',
+      takerFlowAggression: '59.12%',
+      fundingRate: '0.0045%',
+      fundingTrend: '0.0038%',
+      oiDelta: '0.28%',
+      atrVolatility: 0.085,
+      confidence: 78,
+      trends: { '5m': true, '15m': true, '1h': false, '4h': true, '1d': true },
+      support4h: [1.32, 1.62],
+      support1d: [1.15, 1.75],
+      liquidations: { buy: 125000, sell: 95000 },
+      riskRewardRatio: { r1: 2.5, r2: 3.8 },
+      signalStrength: 72,
+      lastSignalTime: new Date(Date.now() - 3600000), // 1 hour ago
+      divergence: {
+        rsi: { bullish: true, bearish: false },
+        macd: { bullish: false, bearish: false }
+      },
+      marketRegime: 'ranging',
+      valueArea: {
+        high: 1.52,
+        low: 1.42,
+        poc: 1.45
+      }
+    },
+    'SOLUSDT': {
+      rsi: {'5m': 27.52, '15m': 29.32, '1h': 32.65, '4h': 35.23, '1d': 38.78},
+      ema: {'5m': 146.25, '15m': 146.58, '1h': 146.91, '4h': 147.82, '1d': 148.25},
+      macd: {
+        line: -0.85,
+        signal: -0.35,
+        histogram: -0.5
+      },
+      bb: {
+        upper: 152.35,
+        middle: 147.82,
+        lower: 143.29,
+        width: 0.061
+      },
+      vwap: 146.75,
+      entryRangeLow: 145.33,
+      entryRangeHigh: 145.92,
+      stopLoss: 144.17,
+      takeProfitOne: 146.35,
+      takeProfitTwo: 147.08,
+      whaleFlow: 'Outflow > Inflow',
+      rvol: '0.22x',
+      deltaVolume: -413061.10,
+      orderBookPressure: '1.50x',
+      takerFlowAggression: '57.57%',
+      fundingRate: '-0.0067%',
+      fundingTrend: '-0.0053%',
+      oiDelta: '-0.04%',
+      atrVolatility: 0.985,
+      confidence: 75,
+      trends: { '5m': false, '15m': true, '1h': true, '4h': false, '1d': false },
+      support4h: [140.25, 153.88],
+      support1d: [95.19, 157.24],
+      liquidations: { buy: 0, sell: 0 },
+      riskRewardRatio: { r1: 1.8, r2: 2.7 },
+      signalStrength: 65,
+      lastSignalTime: new Date(Date.now() - 7200000), // 2 hours ago
+      divergence: {
+        rsi: { bullish: false, bearish: true },
+        macd: { bullish: false, bearish: true }
+      },
+      marketRegime: 'volatile',
+      valueArea: {
+        high: 152.00,
+        low: 144.50,
+        poc: 146.75
+      }
+    },
+    'ETHUSDT': {
+      rsi: {'5m': 45.32, '15m': 47.32, '1h': 48.65, '4h': 46.23, '1d': 49.78},
+      ema: {'5m': 3048.75, '15m': 3050.25, '1h': 3052.45, '4h': 3048.75, '1d': 3035.25},
+      macd: {
+        line: 5.25,
+        signal: 3.75,
+        histogram: 1.5
+      },
+      bb: {
+        upper: 3120.35,
+        middle: 3052.45,
+        lower: 2984.55,
+        width: 0.044
+      },
+      vwap: 3049.85,
+      entryRangeLow: 3025.50,
+      entryRangeHigh: 3075.25,
+      stopLoss: 2980.00,
+      takeProfitOne: 3120.00,
+      takeProfitTwo: 3200.00,
+      whaleFlow: 'Inflow > Outflow',
+      rvol: '0.95x',
+      deltaVolume: 1258.32,
+      orderBookPressure: '1.85x',
+      takerFlowAggression: '58.38%',
+      fundingRate: '0.0011%',
+      fundingTrend: '0.0008%',
+      oiDelta: '0.08%',
+      atrVolatility: 75.50,
+      confidence: 70,
+      trends: { '5m': true, '15m': false, '1h': true, '4h': true, '1d': false },
+      support4h: [2950, 3150],
+      support1d: [2800, 3250],
+      liquidations: { buy: 450000, sell: 320000 },
+      riskRewardRatio: { r1: 2.3, r2: 3.6 },
+      signalStrength: 68,
+      lastSignalTime: new Date(Date.now() - 5400000), // 1.5 hours ago
+      divergence: {
+        rsi: { bullish: false, bearish: false },
+        macd: { bullish: true, bearish: false }
+      },
+      marketRegime: 'trending',
+      valueArea: {
+        high: 3100,
+        low: 3000,
+        poc: 3050
+      }
+    },
+    'BNBUSDT': {
+      rsi: {'5m': 52.18, '15m': 53.32, '1h': 51.65, '4h': 49.23, '1d': 47.78},
+      ema: {'5m': 576.25, '15m': 577.35, '1h': 578.45, '4h': 575.75, '1d': 572.25},
+      macd: {
+        line: 1.25,
+        signal: 0.95,
+        histogram: 0.3
+      },
+      bb: {
+        upper: 590.35,
+        middle: 578.45,
+        lower: 566.55,
+        width: 0.041
+      },
+      vwap: 577.85,
+      entryRangeLow: 572.50,
+      entryRangeHigh: 582.25,
+      stopLoss: 565.00,
+      takeProfitOne: 590.00,
+      takeProfitTwo: 605.00,
+      whaleFlow: 'Inflow > Outflow',
+      rvol: '1.05x',
+      deltaVolume: 3258.32,
+      orderBookPressure: '1.65x',
+      takerFlowAggression: '56.38%',
+      fundingRate: '0.0015%',
+      fundingTrend: '0.0012%',
+      oiDelta: '0.10%',
+      atrVolatility: 12.50,
+      confidence: 68,
+      trends: { '5m': false, '15m': true, '1h': true, '4h': false, '1d': true },
+      support4h: [560, 595],
+      support1d: [540, 610],
+      liquidations: { buy: 350000, sell: 280000 },
+      riskRewardRatio: { r1: 2.0, r2: 3.2 },
+      signalStrength: 62,
+      lastSignalTime: new Date(Date.now() - 10800000), // 3 hours ago
+      divergence: {
+        rsi: { bullish: false, bearish: false },
+        macd: { bullish: false, bearish: false }
+      },
+      marketRegime: 'mixed',
+      valueArea: {
+        high: 585,
+        low: 570,
+        poc: 577
+      }
+    },
+    'DOGEUSDT': {
+      rsi: {'5m': 48.32, '15m': 52.18, '1h': 55.42, '4h': 58.76, '1d': 54.32},
+      ema: {'5m': 0.1325, '15m': 0.1328, '1h': 0.1332, '4h': 0.1318, '1d': 0.1305},
+      macd: {
+        line: 0.0008,
+        signal: 0.0005,
+        histogram: 0.0003
+      },
+      bb: {
+        upper: 0.1385,
+        middle: 0.1332,
+        lower: 0.1279,
+        width: 0.079
+      },
+      vwap: 0.1329,
+      entryRangeLow: 0.1315,
+      entryRangeHigh: 0.1345,
+      stopLoss: 0.1275,
+      takeProfitOne: 0.1385,
+      takeProfitTwo: 0.1425,
+      whaleFlow: 'Inflow > Outflow',
+      rvol: '2.15x',
+      deltaVolume: 15832654.32,
+      orderBookPressure: '2.25x',
+      takerFlowAggression: '64.38%',
+      fundingRate: '0.0035%',
+      fundingTrend: '0.0028%',
+      oiDelta: '0.18%',
+      atrVolatility: 0.0055,
+      confidence: 76,
+      trends: { '5m': true, '15m': true, '1h': true, '4h': false, '1d': true },
+      support4h: [0.125, 0.142],
+      support1d: [0.118, 0.148],
+      liquidations: { buy: 850000, sell: 650000 },
+      riskRewardRatio: { r1: 2.2, r2: 3.4 },
+      signalStrength: 74,
+      lastSignalTime: new Date(Date.now() - 3600000), // 1 hour ago
+      divergence: {
+        rsi: { bullish: true, bearish: false },
+        macd: { bullish: true, bearish: false }
+      },
+      marketRegime: 'trending',
+      valueArea: {
+        high: 0.138,
+        low: 0.128,
+        poc: 0.133
+      }
+    },
+    'ADAUSDT': {
+      rsi: {'5m': 38.45, '15m': 42.32, '1h': 45.65, '4h': 48.23, '1d': 52.78},
+      ema: {'5m': 0.4425, '15m': 0.4435, '1h': 0.4445, '4h': 0.4415, '1d': 0.4385},
+      macd: {
+        line: -0.0015,
+        signal: -0.0010,
+        histogram: -0.0005
+      },
+      bb: {
+        upper: 0.4585,
+        middle: 0.4445,
+        lower: 0.4305,
+        width: 0.063
+      },
+      vwap: 0.4432,
+      entryRangeLow: 0.4395,
+      entryRangeHigh: 0.4455,
+      stopLoss: 0.4325,
+      takeProfitOne: 0.4525,
+      takeProfitTwo: 0.4595,
+      whaleFlow: 'Neutral',
+      rvol: '0.85x',
+      deltaVolume: -5832654.32,
+      orderBookPressure: '0.95x',
+      takerFlowAggression: '48.38%',
+      fundingRate: '-0.0015%',
+      fundingTrend: '-0.0012%',
+      oiDelta: '-0.08%',
+      atrVolatility: 0.0125,
+      confidence: 62,
+      trends: { '5m': false, '15m': false, '1h': true, '4h': true, '1d': true },
+      support4h: [0.425, 0.462],
+      support1d: [0.415, 0.475],
+      liquidations: { buy: 250000, sell: 350000 },
+      riskRewardRatio: { r1: 1.8, r2: 2.9 },
+      signalStrength: 58,
+      lastSignalTime: new Date(Date.now() - 14400000), // 4 hours ago
+      divergence: {
+        rsi: { bullish: false, bearish: false },
+        macd: { bullish: false, bearish: true }
+      },
+      marketRegime: 'ranging',
+      valueArea: {
+        high: 0.455,
+        low: 0.435,
+        poc: 0.443
+      }
+    },
+    'XRPUSDT': {
+      rsi: {'5m': 62.45, '15m': 58.32, '1h': 55.65, '4h': 52.23, '1d': 48.78},
+      ema: {'5m': 0.5225, '15m': 0.5235, '1h': 0.5245, '4h': 0.5215, '1d': 0.5185},
+      macd: {
+        line: 0.0025,
+        signal: 0.0015,
+        histogram: 0.0010
+      },
+      bb: {
+        upper: 0.5385,
+        middle: 0.5245,
+        lower: 0.5105,
+        width: 0.053
+      },
+      vwap: 0.5232,
+      entryRangeLow: 0.5195,
+      entryRangeHigh: 0.5255,
+      stopLoss: 0.5125,
+      takeProfitOne: 0.5325,
+      takeProfitTwo: 0.5395,
+      whaleFlow: 'Inflow > Outflow',
+      rvol: '1.35x',
+      deltaVolume: 12832654.32,
+      orderBookPressure: '1.45x',
+      takerFlowAggression: '56.38%',
+      fundingRate: '0.0025%',
+      fundingTrend: '0.0020%',
+      oiDelta: '0.12%',
+      atrVolatility: 0.0125,
+      confidence: 72,
+      trends: { '5m': true, '15m': true, '1h': true, '4h': false, '1d': false },
+      support4h: [0.505, 0.542],
+      support1d: [0.495, 0.555],
+      liquidations: { buy: 650000, sell: 450000 },
+      riskRewardRatio: { r1: 2.0, r2: 3.2 },
+      signalStrength: 68,
+      lastSignalTime: new Date(Date.now() - 7200000), // 2 hours ago
+      divergence: {
+        rsi: { bullish: true, bearish: false },
+        macd: { bullish: false, bearish: false }
+      },
+      marketRegime: 'trending',
+      valueArea: {
+        high: 0.535,
+        low: 0.515,
+        poc: 0.523
+      }
+    }
+  });
+
+  // Technical indicator calculation functions
+  const calculateRSI = (prices: number[], periods = 14) => {
+    if (prices.length < periods + 1) {
+      return 50;
+    }
+    
+    let gains = 0;
+    let losses = 0;
+    
+    for (let i = 1; i <= periods; i++) {
+      const difference = prices[i] - prices[i-1];
+      if (difference >= 0) {
+        gains += difference;
+      } else {
+        losses -= difference;
+      }
+    }
+    
+    let avgGain = gains / periods;
+    let avgLoss = losses / periods;
+    
+    for (let i = periods + 1; i < prices.length; i++) {
+      const difference = prices[i] - prices[i-1];
+      
+      if (difference >= 0) {
+        avgGain = (avgGain * (periods - 1) + difference) / periods;
+        avgLoss = (avgLoss * (periods - 1)) / periods;
+      } else {
+        avgGain = (avgGain * (periods - 1)) / periods;
+        avgLoss = (avgLoss * (periods - 1) - difference) / periods;
+      }
+    }
+    
+    if (avgLoss === 0) {
+      return 100;
+    }
+    
+    const rs = avgGain / avgLoss;
+    return 100 - (100 / (1 + rs));
+  };
+
+  const calculateEMA = (prices: number[], periods: number, previousEMA?: number) => {
+    if (!previousEMA && prices.length < periods) {
+      return prices.reduce((sum, price) => sum + price, 0) / prices.length;
+    }
+    
+    const multiplier = 2 / (periods + 1);
+    
+    if (!previousEMA) {
+      const sma = prices.slice(0, periods).reduce((sum, price) => sum + price, 0) / periods;
+      return sma;
+    }
+    
+    return (prices[prices.length - 1] - previousEMA) * multiplier + previousEMA;
+  };
+
+  const calculateMACD = (prices: number[], fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) => {
+    if (prices.length < Math.max(fastPeriod, slowPeriod) + signalPeriod) {
+      return { line: 0, signal: 0, histogram: 0 };
+    }
+    
+    const fastEMA = calculateEMA(prices, fastPeriod);
+    const slowEMA = calculateEMA(prices, slowPeriod);
+    const macdLine = fastEMA - slowEMA;
+    
+    const macdValues = [];
+    for (let i = 0; i < prices.length - Math.max(fastPeriod, slowPeriod); i++) {
+      const slicedPrices = prices.slice(0, Math.max(fastPeriod, slowPeriod) + i);
+      const fastEMA = calculateEMA(slicedPrices, fastPeriod);
+      const slowEMA = calculateEMA(slicedPrices, slowPeriod);
+      macdValues.push(fastEMA - slowEMA);
+    }
+    
+    const signalLine = calculateEMA(macdValues, signalPeriod);
+    const histogram = macdLine - signalLine;
+    
+    return { line: macdLine, signal: signalLine, histogram };
+  };
+
+  const calculateBollingerBands = (prices: number[], periods = 20, multiplier = 2) => {
+    if (prices.length < periods) {
+      return { 
+        upper: prices[prices.length-1] * 1.05, 
+        middle: prices[prices.length-1], 
+        lower: prices[prices.length-1] * 0.95,
+        width: 0.1
+      };
+    }
+    
+    const slicedPrices = prices.slice(prices.length - periods);
+    const sma = slicedPrices.reduce((sum, price) => sum + price, 0) / periods;
+    
+    const squaredDifferences = slicedPrices.map(price => Math.pow(price - sma, 2));
+    const variance = squaredDifferences.reduce((sum, val) => sum + val, 0) / periods;
+    const stdDev = Math.sqrt(variance);
+    
+    const upper = sma + (multiplier * stdDev);
+    const lower = sma - (multiplier * stdDev);
+    const width = (upper - lower) / sma;
+    
+    return {
+      upper,
+      middle: sma,
+      lower,
+      width
+    };
+  };
+
+  const calculateVWAP = (prices: number[][], volumes: number[]) => {
+    if (prices.length === 0 || volumes.length === 0) {
+      return 0;
+    }
+    
+    let cumulativeTPV = 0;
+    let cumulativeVolume = 0;
+    
+    for (let i = 0; i < Math.min(prices.length, volumes.length); i++) {
+      const typicalPrice = (prices[i][1] + prices[i][2] + prices[i][4]) / 3;
+      cumulativeTPV += typicalPrice * volumes[i];
+      cumulativeVolume += volumes[i];
+    }
+    
+    return cumulativeVolume === 0 ? prices[prices.length-1][4] : cumulativeTPV / cumulativeVolume;
+  };
+
+  const calculateATR = (prices: number[][], periods = 14) => {
+    if (prices.length < 2) {
+      return 0;
+    }
+    
+    const trueRanges = [];
+    
+    for (let i = 1; i < prices.length; i++) {
+      const high = prices[i][2];
+      const low = prices[i][3];
+      const previousClose = prices[i-1][4];
+      
+      const tr1 = high - low;
+      const tr2 = Math.abs(high - previousClose);
+      const tr3 = Math.abs(low - previousClose);
+      
+      trueRanges.push(Math.max(tr1, tr2, tr3));
+    }
+    
+    if (trueRanges.length < periods) {
+      return trueRanges.reduce((sum, tr) => sum + tr, 0) / trueRanges.length;
+    }
+    
+    let atr = trueRanges.slice(0, periods).reduce((sum, tr) => sum + tr, 0) / periods;
+    
+    for (let i = periods; i < trueRanges.length; i++) {
+      atr = ((atr * (periods - 1)) + trueRanges[i]) / periods;
+    }
+    
+    return atr;
+  };
+
+  const calculateAdaptiveATR = (prices: number[][], periods = 14, sensitivity = 1.5) => {
+    const atr = calculateATR(prices, periods);
+    const recentVolatility = calculateATR(prices.slice(-7), 7);
+    const volatilityRatio = recentVolatility / atr;
+    
+    let multiplier = sensitivity;
+    if (volatilityRatio > 1.5) {
+      // Higher volatility, tighter stops
+      multiplier = sensitivity * 0.8;
+    } else if (volatilityRatio < 0.7) {
+      // Lower volatility, wider stops
+      multiplier = sensitivity * 1.2;
+    }
+    
+    return atr * multiplier;
+  };
+
+  const calculateStandardDeviation = (values: number[]) => {
+    const mean = values.reduce((sum, val) => sum + val, 0) / values.length;
+    const squaredDiffs = values.map(val => Math.pow(val - mean, 2));
+    const variance = squaredDiffs.reduce((sum, val) => sum + val, 0) / values.length;
+    return Math.sqrt(variance);
+  };
+
+  const checkDivergence = (prices: number[], oscillator: number[], periods = 14) => {
+    if (prices.length < periods * 2 || oscillator.length < periods * 2) {
+      return { bullish: false, bearish: false };
+    }
+    
+    const recentPrices = prices.slice(-periods * 2);
+    const recentOsc = oscillator.slice(-periods * 2);
+    
+    const priceHighs = [Math.max(...recentPrices.slice(0, periods)), Math.max(...recentPrices.slice(-periods))];
+    const priceLows = [Math.min(...recentPrices.slice(0, periods)), Math.min(...recentPrices.slice(-periods))];
+    const oscHighs = [Math.max(...recentOsc.slice(0, periods)), Math.max(...recentOsc.slice(-periods))];
+    const oscLows = [Math.min(...recentOsc.slice(0, periods)), Math.min(...recentOsc.slice(-periods))];
+    
+    const bullishDiv = priceHighs[1] > priceHighs[0] && oscHighs[1] < oscHighs[0];
+    const bearishDiv = priceLows[1] < priceLows[0] && oscLows[1] > oscLows[0];
+    
+    return {
+      bullish: bullishDiv,
+      bearish: bearishDiv
+    };
+  };
+
+  const calculateVolumeProfile = (priceVolData: number[][], divisions = 10) => {
+    if (!priceVolData || priceVolData.length === 0) return {
+      profile: [],
+      valueArea: { high: 0, low: 0, poc: 0 }
+    };
+    
+    const prices = priceVolData.map(candle => parseFloat(candle[4].toString()));
+    const volumes = priceVolData.map(candle => parseFloat(candle[5].toString()));
+    
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    const range = max - min;
+    const increment = range / divisions;
+    
+    const profile = Array(divisions).fill(0);
+    
+    prices.forEach((price, i) => {
+      const index = Math.min(Math.floor((price - min) / increment), divisions - 1);
+      profile[index] += volumes[i];
+    });
+    
+    const maxVolume = Math.max(...profile);
+    const valueArea = profile.reduce((sum, vol) => sum + vol, 0) * 0.7;
+    let cumulativeVolume = 0;
+    const valueAreaLevels = [];
+    
+    for (let i = 0; i < profile.length; i++) {
+      if (profile[i] === maxVolume) {
+        valueAreaLevels.push(i);
+        cumulativeVolume += profile[i];
+      }
+    }
+    
+    let upper = valueAreaLevels[valueAreaLevels.length - 1];
+    let lower = valueAreaLevels[0];
+    
+    while (cumulativeVolume < valueArea && (upper < divisions - 1 || lower > 0)) {
+      const upperVol = upper < divisions - 1 ? profile[upper + 1] : 0;
+      const lowerVol = lower > 0 ? profile[lower - 1] : 0;
+      
+      if (upperVol > lowerVol && upper < divisions - 1) {
+        upper++;
+        cumulativeVolume += upperVol;
+      } else if (lower > 0) {
+        lower--;
+        cumulativeVolume += lowerVol;
+      }
+    }
+    
+    return {
+      profile,
+      valueArea: {
+        high: min + (upper + 1) * increment,
+        low: min + lower * increment,
+        poc: min + (valueAreaLevels[0] + 0.5) * increment
+      }
+    };
+  };
+
+  const detectMarketRegime = (prices: number[], volumes: number[], atr: number) => {
+    if (prices.length < 20) return 'unknown';
+    
+    const returns = [];
+    for (let i = 1; i < prices.length; i++) {
+      returns.push((prices[i] - prices[i-1]) / prices[i-1]);
+    }
+    
+    const volatility = calculateStandardDeviation(returns) * Math.sqrt(252);
+    const trendStrength = Math.abs(prices[prices.length-1] - prices[0]) / (atr * Math.sqrt(prices.length / 14));
+    const volumeChange = volumes.slice(-10).reduce((a, b) => a + b, 0) / 
+                         volumes.slice(-20, -10).reduce((a, b) => a + b, 0);
+    
+    if (volatility > 0.04 && trendStrength < 1.5) {
+      return 'choppy';
+    } else if (volatility > 0.03 && trendStrength > 2.5) {
+      return 'trending';
+    } else if (volatility < 0.02 && volumeChange < 0.8) {
+      return 'ranging';
+    } else if (volatility > 0.05 && volumeChange > 1.5) {
+      return 'volatile';
+    }
+    
+    return 'mixed';
+  };
+
+  // WebSocket and data handling functions
+  const connectWebSocketWithReconnect = useCallback(() => {
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
+    const baseDelay = 1000;
+    
+    const connect = () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+      
+      const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${selectedSymbol.toLowerCase()}@trade/${selectedSymbol.toLowerCase()}@depth10@100ms`);
+      
+      ws.onopen = () => {
+        console.log('WebSocket connected');
+        reconnectAttempts = 0;
+      };
+      
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        
+        if (data.e === 'trade') {
+          setMarketData(prev => ({
+            ...prev,
+            price: parseFloat(data.p),
+            lastUpdate: new Date()
+          }));
+          
+          // Update chart with new trade data
+          if (candleSeriesRef.current && chartRef.current) {
+            const lastCandle = candleSeriesRef.current.dataByIndex(
+              candleSeriesRef.current.data().length - 1
+            ) as CandlestickData;
+            
+            if (lastCandle) {
+              const price = parseFloat(data.p);
+              const updatedCandle = {
+                ...lastCandle,
+                close: price,
+                high: Math.max(lastCandle.high, price),
+                low: Math.min(lastCandle.low, price)
+              };
+              
+              candleSeriesRef.current.update(updatedCandle);
+            }
+          }
+        }
+        
+        if (data.e === 'depthUpdate') {
+          let bidVolume = 0;
+          let askVolume = 0;
+          
+          data.b.forEach((bid: string[]) => {
+            bidVolume += parseFloat(bid[0]) * parseFloat(bid[1]);
+          });
+          
+          data.a.forEach((ask: string[]) => {
+            askVolume += parseFloat(ask[0]) * parseFloat(ask[1]);
+          });
+          
+          const orderBookPressure = askVolume === 0 ? 99 : bidVolume / askVolume;
+          
+          updateOrderBookPressure(selectedSymbol, orderBookPressure);
+        }
+      };
+      
+      ws.onclose = (event) => {
+        console.log('WebSocket disconnected', event.code, event.reason);
+        
+        if (reconnectAttempts < maxReconnectAttempts) {
+          const delay = baseDelay * Math.pow(2, reconnectAttempts);
+          console.log(`Reconnecting in ${delay}ms...`);
+          setTimeout(() => {
+            reconnectAttempts++;
+            connect();
+          }, delay);
+        } else {
+          setError('WebSocket connection failed after multiple attempts. Using fallback method.');
+          // Fallback to polling
+          startPolling();
+        }
+      };
+      
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+      };
+      
+      wsRef.current = ws;
+    };
+    
+    connect();
+    
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, [selectedSymbol]);
+
+  const startPolling = () => {
+    const intervalId = setInterval(() => {
+      fetchBinanceData();
+    }, 2000);
+    
+    return () => clearInterval(intervalId);
+  };
+
+  // Data fetching functions
+  const fetchWithRetry = async (url: string, options = {}, retries = 3, delay = 1000) => {
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return await response.json();
+    } catch (error) {
+      if (retries > 0) {
+        console.log(`Retrying fetch to ${url}, ${retries} retries left`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return fetchWithRetry(url, options, retries - 1, delay * 1.5);
+      } else {
+        throw error;
+      }
+    }
+  };
+
+  const fetchHistoricalData = async () => {
+    try {
+      setLoading(true);
+      const timeframes = selectedTimeframes;
+      const promises = timeframes.map(timeframe => 
+        binanceRateLimiter.current.fetch(`https://api.binance.com/api/v3/klines?symbol=${selectedSymbol}&interval=${timeframe}&limit=100`)
+          .then(res => res.json())
+      );
+      
+      const results = await Promise.all(promises);
+      
+      results.forEach((data, index) => {
+        const timeframe = timeframes[index];
+        
+        historicalDataRef.current.prices[timeframe] = data;
+        historicalDataRef.current.volumes[timeframe] = data.map((candle: any[]) => parseFloat(candle[5]));
+        
+        const closePrices = data.map((candle: any[]) => parseFloat(candle[4]));
+        
+        const rsi = calculateRSI(closePrices, timeframe === '1d' ? 14 : timeframe === '4h' ? 14 : timeframe === '1h' ? 14 : 14);
+        
+        const ema = calculateEMA(
+          closePrices, 
+          timeframe === '1d' ? 21 : timeframe === '4h' ? 21 : timeframe === '1h' ? 21 : timeframe === '15m' ? 21 : 21,
+          pairAnalytics[selectedSymbol]?.ema[timeframe]
+        );
+        
+        setPairAnalytics(prev => ({
+          ...prev,
+          [selectedSymbol]: {
+            ...prev[selectedSymbol],
+            rsi: {
+              ...prev[selectedSymbol].rsi,
+              [timeframe]: parseFloat(rsi.toFixed(2))
+            },
+            ema: {
+              ...prev[selectedSymbol].ema,
+              [timeframe]: parseFloat(ema.toFixed(selectedSymbol === 'BTCUSDT' ? 2 : 4))
+            }
+          }
+        }));
+      });
+      
+      // Update chart data if available
+      if (results.length > 0 && results[2] && candleSeriesRef.current) { // Using 1h data for chart
+        const data1h = results[2];
+        const chartData = data1h.map((candle: any[]) => ({
+          time: candle[0] / 1000,
+          open: parseFloat(candle[1]),
+          high: parseFloat(candle[2]),
+          low: parseFloat(candle[3]),
+          close: parseFloat(candle[4])
+        }));
+        
+        candleSeriesRef.current.setData(chartData);
+        
+        if (volumeSeriesRef.current) {
+          const volumeData = data1h.map((candle: any[]) => ({
+            time: candle[0] / 1000,
+            value: parseFloat(candle[5]),
+            color: parseFloat(candle[4]) >= parseFloat(candle[1]) ? 'rgba(76, 175, 80, 0.5)' : 'rgba(255, 82, 82, 0.5)'
+          }));
+          
+          volumeSeriesRef.current.setData(volumeData);
+        }
+      }
+      
+      const data1h = results[2];
+      if (data1h && data1h.length > 0) {
+        const closePrices = data1h.map((candle: any[]) => parseFloat(candle[4]));
+        const volumes = data1h.map((candle: any[]) => parseFloat(candle[5]));
+        
+        const macd = calculateMACD(closePrices);
+        const bb = calculateBollingerBands(closePrices);
+        const vwap = calculateVWAP(data1h, volumes);
+        const atr = calculateATR(data1h);
+        const adaptiveAtr = calculateAdaptiveATR(data1h);
+        
+        // Check for divergences
+        const rsiValues = closePrices.map((_: number, i: number, arr: number[]) => {
+          if (i < 14) return 50;
+          return calculateRSI(arr.slice(0, i + 1));
+        });
+        
+        const rsiDivergence = checkDivergence(closePrices.slice(-28), rsiValues.slice(-28));
+        
+        const macdValues = [];
+        for (let i = 26; i < closePrices.length; i++) {
+          const macd = calculateMACD(closePrices.slice(0, i + 1));
+          macdValues.push(macd.histogram);
+        }
+        
+        const macdDivergence = checkDivergence(closePrices.slice(-28), macdValues.slice(-28));
+        
+        // Calculate volume profile
+        const volumeProfile = calculateVolumeProfile(data1h);
+        
+        // Detect market regime
+        const marketRegime = detectMarketRegime(closePrices, volumes, atr);
+        
+        setPairAnalytics(prev => ({
+          ...prev,
+          [selectedSymbol]: {
+            ...prev[selectedSymbol],
+            macd: {
+              line: parseFloat(macd.line.toFixed(selectedSymbol === 'BTCUSDT' ? 2 : 4)),
+              signal: parseFloat(macd.signal.toFixed(selectedSymbol === 'BTCUSDT' ? 2 : 4)),
+              histogram: parseFloat(macd.histogram.toFixed(selectedSymbol === 'BTCUSDT' ? 2 : 4))
+            },
+            bb: {
+              upper: parseFloat(bb.upper.toFixed(selectedSymbol === 'BTCUSDT' ? 2 : 4)),
+              middle: parseFloat(bb.middle.toFixed(selectedSymbol === 'BTCUSDT' ? 2 : 4)),
+              lower: parseFloat(bb.lower.toFixed(selectedSymbol === 'BTCUSDT' ? 2 : 4)),
+              width: parseFloat(bb.width.toFixed(3))
+            },
+            vwap: parseFloat(vwap.toFixed(selectedSymbol === 'BTCUSDT' ? 2 : 4)),
+            atrVolatility: parseFloat(atr.toFixed(selectedSymbol === 'BTCUSDT' ? 2 : 4)),
+            divergence: {
+              rsi: rsiDivergence,
+              macd: macdDivergence
+            },
+            marketRegime,
+            valueArea: {
+              high: parseFloat(volumeProfile.valueArea.high.toFixed(selectedSymbol === 'BTCUSDT' ? 2 : 4)),
+              low: parseFloat(volumeProfile.valueArea.low.toFixed(selectedSymbol === 'BTCUSDT' ? 2 : 4)),
+              poc: parseFloat(volumeProfile.valueArea.poc.toFixed(selectedSymbol === 'BTCUSDT' ? 2 : 4))
+            }
+          }
+        }));
+      }
+      
+    } catch (err) {
+      console.error('Error fetching historical data:', err);
+      setError('Failed to fetch historical data for technical indicators.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchBinanceData = async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const tickerResponse = await binanceRateLimiter.current.fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${selectedSymbol}`);
+      if (!tickerResponse.ok) throw new Error('Failed to fetch ticker data');
+      
+      const tickerData = await tickerResponse.json();
+      
+      setMarketData({
+        price: parseFloat(tickerData.lastPrice),
+        priceChangePercent: parseFloat(tickerData.priceChangePercent),
+        high24h: parseFloat(tickerData.highPrice),
+        low24h: parseFloat(tickerData.lowPrice),
+        volume: parseFloat(tickerData.volume),
+        lastUpdate: new Date()
+      });
+      
+      await fetchHistoricalData();
+      
+      updateTradeParameters(selectedSymbol, parseFloat(tickerData.lastPrice));
+      
+      const orderBookResponse = await binanceRateLimiter.current.fetch(`https://api.binance.com/api/v3/depth?symbol=${selectedSymbol}&limit=100`);
+      if (orderBookResponse.ok) {
+        const orderBookData = await orderBookResponse.json();
+        
+        const bidVolume = orderBookData.bids.reduce((sum: number, bid: string[]) => sum + (parseFloat(bid[0]) * parseFloat(bid[1])), 0);
+        const askVolume = orderBookData.asks.reduce((sum: number, ask: string[]) => sum + (parseFloat(ask[0]) * parseFloat(ask[1])), 0);
+        
+        const orderBookPressure = askVolume === 0 ? 99 : bidVolume / askVolume;
+        
+        updateOrderBookPressure(selectedSymbol, orderBookPressure);
+      }
+      
+      try {
+        const fundingResponse = await binanceRateLimiter.current.fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${selectedSymbol}&limit=1`);
+        if (fundingResponse.ok) {
+          const fundingData = await fundingResponse.json();
+          if (fundingData.length > 0) {
+            updateFundingRate(selectedSymbol, parseFloat(fundingData[0].fundingRate) * 100);
+          }
+        }
+      } catch (fundingErr) {
+        console.log('Funding rate fetch failed, might not be a futures market');
+      }
+      
+      await fetchMultiExchangePrices();
+      updateSignalStrength(selectedSymbol);
+      
+    } catch (err) {
+      console.error('Error fetching data:', err);
+      setError('Failed to fetch market data. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const fetchMultiExchangePrices = async () => {
+    try {
+      const binanceRes = await binanceRateLimiter.current.fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${selectedSymbol}`);
+      let binanceData;
+      if (binanceRes.ok) {
+        binanceData = await binanceRes.json();
+      }
+      
+      // Note: These might not work directly and would need proper API integration
+      // This is just a placeholder to show the concept
+      const coinbaseSymbol = selectedSymbol.replace('USDT', '-USD');
+      const bybitSymbol = selectedSymbol;
+      
+      // Simulate responses for demo purposes
+      const binancePrice = binanceData ? parseFloat(binanceData.price) : marketData.price;
+      const coinbasePrice = binancePrice * (1 + (Math.random() * 0.01 - 0.005)); // +/- 0.5%
+      const bybitPrice = binancePrice * (1 + (Math.random() * 0.01 - 0.005)); // +/- 0.5%
+      
+      const maxDiff = Math.max(
+        Math.abs(binancePrice - coinbasePrice) / binancePrice * 100,
+        Math.abs(binancePrice - bybitPrice) / binancePrice * 100
+      );
+      
+      setExchangePrices({
+        binance: binancePrice,
+        coinbase: coinbasePrice,
+        bybit: bybitPrice,
+        difference: maxDiff
+      });
+    } catch (err) {
+      console.error('Failed to fetch multi-exchange prices', err);
+    }
+  };
+  
+  const updateTradeParameters = (symbol: string, currentPrice: number) => {
+    const analytics = {...pairAnalytics[symbol]};
+    const atr = analytics.atrVolatility;
+    
+    if (signalType === 'LONG') {
+      analytics.entryRangeLow = parseFloat((currentPrice - 0.5 * atr).toFixed(symbol === 'BTCUSDT' ? 2 : 4));
+      analytics.entryRangeHigh = parseFloat((currentPrice + 0.2 * atr).toFixed(symbol === 'BTCUSDT' ? 2 : 4));
+      
+      analytics.stopLoss = parseFloat((currentPrice - 2 * atr).toFixed(symbol === 'BTCUSDT' ? 2 : 4));
+      
+      const risk = currentPrice - analytics.stopLoss;
+      analytics.takeProfitOne = parseFloat((currentPrice + risk * analytics.riskRewardRatio.r1).toFixed(symbol === 'BTCUSDT' ? 2 : 4));
+      analytics.takeProfitTwo = parseFloat((currentPrice + risk * analytics.riskRewardRatio.r2).toFixed(symbol === 'BTCUSDT' ? 2 : 4));
+    } else {
+      analytics.entryRangeLow = parseFloat((currentPrice - 0.2 * atr).toFixed(symbol === 'BTCUSDT' ? 2 : 4));
+      analytics.entryRangeHigh = parseFloat((currentPrice + 0.5 * atr).toFixed(symbol === 'BTCUSDT' ? 2 : 4));
+      
+      analytics.stopLoss = parseFloat((currentPrice + 2 * atr).toFixed(symbol === 'BTCUSDT' ? 2 : 4));
+      
+      const risk = analytics.stopLoss - currentPrice;
+      analytics.takeProfitOne = parseFloat((currentPrice - risk * analytics.riskRewardRatio.r1).toFixed(symbol === 'BTCUSDT' ? 2 : 4));
+      analytics.takeProfitTwo = parseFloat((currentPrice - risk * analytics.riskRewardRatio.r2).toFixed(symbol === 'BTCUSDT' ? 2 : 4));
+    }
+    
+    analytics.support4h = [
+      parseFloat((analytics.bb.lower).toFixed(symbol === 'BTCUSDT' ? 2 : 4)),
+      parseFloat((analytics.bb.upper).toFixed(symbol === 'BTCUSDT' ? 2 : 4))
+    ];
+    
+    setPairAnalytics((prev) => ({
+      ...prev,
+      [symbol]: analytics
+    }));
+  };
+  
+  const updateOrderBookPressure = (symbol: string, pressure: number) => {
+    setPairAnalytics((prev) => ({
+      ...prev,
+      [symbol]: {
+        ...prev[symbol],
+        orderBookPressure: pressure.toFixed(2) + 'x',
+        takerFlowAggression: (pressure > 1 ? 
+          (50 + Math.min(pressure * 5, 30)).toFixed(2) : 
+          (50 - Math.min((1/pressure) * 5, 30)).toFixed(2)) + '%'
+      }
+    }));
+  };
+  
+  const updateFundingRate = (symbol: string, rate: number) => {
+    const fundingTrend = rate * 0.85;
+    
+    setPairAnalytics((prev) => ({
+      ...prev,
+      [symbol]: {
+        ...prev[symbol],
+        fundingRate: rate.toFixed(4) + '%',
+        fundingTrend: fundingTrend.toFixed(4) + '%',
+        oiDelta: ((rate - fundingTrend) * 10).toFixed(2) + '%'
+      }
+    }));
+  };
+  
+  const updateSignalStrength = (symbol: string) => {
+    const analytics = pairAnalytics[symbol];
+    
+    const timeframes = ['5m', '15m', '1h', '4h', '1d'];
+    let timeframeConfirmations = 0;
+    
+    timeframes.forEach(tf => {
+      const isLongSignal = signalType === 'LONG';
+      const rsiConfirms = isLongSignal ? 
+        (analytics.rsi[tf] < 40 && analytics.rsi[tf] > 20) : 
+        (analytics.rsi[tf] > 60 && analytics.rsi[tf] < 80);
+      
+      const emaConfirms = isLongSignal ?
+        (analytics.ema[tf] < marketData.price) : 
+        (analytics.ema[tf] > marketData.price);
+      
+      if (rsiConfirms && emaConfirms) {
+        timeframeConfirmations++;
+      }
+    });
+    
+    const macdConfirms = signalType === 'LONG' ?
+      (analytics.macd.histogram > 0 && analytics.macd.histogram > analytics.macd.histogram) :
+      (analytics.macd.histogram < 0 && analytics.macd.histogram < analytics.macd.histogram);
+    
+    const bbConfirms = signalType === 'LONG' ?
+      (marketData.price < analytics.bb.lower * 1.01) : 
+      (marketData.price > analytics.bb.upper * 0.99);
+    
+    const volumeConfirms = parseFloat(analytics.rvol) > 1.2;
+    
+    const obConfirms = signalType === 'LONG' ?
+      (parseFloat(analytics.orderBookPressure) > 1.2) :
+      (parseFloat(analytics.orderBookPressure) < 0.8);
+    
+    const whaleConfirms = signalType === 'LONG' ?
+      analytics.whaleFlow.includes('Inflow > Outflow') :
+      analytics.whaleFlow.includes('Outflow > Inflow');
+    
+    // Add divergence confirmation
+    const divergenceConfirms = signalType === 'LONG' ?
+      analytics.divergence?.rsi.bullish || analytics.divergence?.macd.bullish :
+      analytics.divergence?.rsi.bearish || analytics.divergence?.macd.bearish;
+    
+    // Add market regime confirmation
+    const regimeConfirms = signalType === 'LONG' ?
+      analytics.marketRegime === 'trending' || analytics.marketRegime === 'volatile' :
+      analytics.marketRegime === 'ranging' || analytics.marketRegime === 'choppy';
+    
+    const signalStrength = (
+      (timeframeConfirmations / timeframes.length) * 35 + 
+      (macdConfirms ? 10 : 0) +                          
+      (bbConfirms ? 10 : 0) +                            
+      (volumeConfirms ? 10 : 0) +                        
+      (obConfirms ? 10 : 0) +                            
+      (whaleConfirms ? 10 : 0) +
+      (divergenceConfirms ? 10 : 0) +
+      (regimeConfirms ? 5 : 0)
+    );
+    
+    const confidence = Math.min(Math.max(Math.round(signalStrength), 0), 100);
+    
+    const previousConfidence = pairAnalytics[symbol].confidence;
+    const newSignalTime = confidence > 75 && Math.abs(confidence - previousConfidence) > 10;
+    
+    setPairAnalytics((prev) => ({
+      ...prev,
+      [symbol]: {
+        ...prev[symbol],
+        signalStrength: parseFloat(signalStrength.toFixed(1)),
+        confidence,
+        lastSignalTime: newSignalTime ? new Date() : prev[symbol].lastSignalTime
+      }
+    }));
+    
+    // Check if we need to create an alert
+    if (newSignalTime) {
+      const newAlert = {
+        id: Date.now(),
+        symbol,
+        message: `Strong ${signalType} signal detected for ${symbol} with ${confidence}% confidence`,
+        type: 'success' as const,
+        time: new Date(),
+        read: false
+      };
+      
+      setAlerts(prev => [newAlert, ...prev].slice(0, 20));
+      
+      // Optional: Play sound
+      try {
+        new Audio('/alert-sound.mp3').play();
+      } catch (e) {
+        console.log('Audio alert not supported');
+      }
+    return {
+      size: positionSize.toFixed(selectedSymbol === 'BTCUSDT' ? 4 : 2),
+      value: positionValue.toFixed(2),
+      leverage: (positionValue / (accountSize * (riskPercentage / 100))).toFixed(1) + 'x'
+    };
+  };
+
+  // Chart initialization
+  const initializeChart = useCallback(() => {
+    if (!chartContainerRef.current) return;
+    
+    if (chartRef.current) {
+      chartRef.current.remove();
+    }
+    
+    const chart = createChart(chartContainerRef.current, {
+      width: chartContainerRef.current.clientWidth,
+      height: 300,
+      layout: {
+        background: theme === 'dark' ? '#1a1a2e' : '#ffffff',
+        textColor: theme === 'dark' ? '#d1d4dc' : '#191919',
+      },
+      grid: {
+        vertLines: {
+          color: theme === 'dark' ? 'rgba(42, 46, 57, 0.5)' : 'rgba(42, 46, 57, 0.2)',
+        },
+        horzLines: {
+          color: theme === 'dark' ? 'rgba(42, 46, 57, 0.5)' : 'rgba(42, 46, 57, 0.2)',
+        },
+      },
+      timeScale: {
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      crosshair: {
+        mode: 1,
+      },
+    });
+    
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#4caf50',
+      downColor: '#ff5252',
+      borderDownColor: '#ff5252',
+      borderUpColor: '#4caf50',
+      wickDownColor: '#ff5252',
+      wickUpColor: '#4caf50',
+    });
+    
+    const volumeSeries = chart.addHistogramSeries({
+      color: '#26a69a',
+      priceFormat: {
+        type: 'volume',
+      },
+      priceScaleId: '',
+      scaleMargins: {
+        top: 0.8,
+        bottom: 0,
+      },
+    });
+    
+    chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+    volumeSeriesRef.current = volumeSeries;
+    
+    // Add EMA lines
+    const ema21Series = chart.addLineSeries({
+      color: '#2196F3',
+      lineWidth: 2,
+      priceLineVisible: false,
+    });
+    
+    const ema50Series = chart.addLineSeries({
+      color: '#FF9800',
+      lineWidth: 2,
+      priceLineVisible: false,
+    });
+    
+    // Resize handler
+    const handleResize = () => {
+      if (chartContainerRef.current && chartRef.current) {
+        chartRef.current.applyOptions({
+          width: chartContainerRef.current.clientWidth,
+        });
+      }
+    };
+    
+    window.addEventListener('resize', handleResize);
+    
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      if (chartRef.current) {
+        chartRef.current.remove();
+      }
+    };
+  }, [theme]);
+
+  const initializeFullscreenChart = useCallback(() => {
+    if (!fullscreenChartContainerRef.current || !showFullscreenChart) return;
+    
+    const chart = createChart(fullscreenChartContainerRef.current, {
+      width: fullscreenChartContainerRef.current.clientWidth,
+      height: fullscreenChartContainerRef.current.clientHeight,
+      layout: {
+        background: theme === 'dark' ? '#1a1a2e' : '#ffffff',
+        textColor: theme === 'dark' ? '#d1d4dc' : '#191919',
+      },
+      grid: {
+        vertLines: {
+          color: theme === 'dark' ? 'rgba(42, 46, 57, 0.5)' : 'rgba(42, 46, 57, 0.2)',
+        },
+        horzLines: {
+          color: theme === 'dark' ? 'rgba(42, 46, 57, 0.5)' : 'rgba(42, 46, 57, 0.2)',
+        },
+      },
+      timeScale: {
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      crosshair: {
+        mode: 1,
+      },
+    });
+    
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#4caf50',
+      downColor: '#ff5252',
+      borderDownColor: '#ff5252',
+      borderUpColor: '#4caf50',
+      wickDownColor: '#ff5252',
+      wickUpColor: '#4caf50',
+    });
+    
+    const volumeSeries = chart.addHistogramSeries({
+      color: '#26a69a',
+      priceFormat: {
+        type: 'volume',
+      },
+      priceScaleId: '',
+      scaleMargins: {
+        top: 0.8,
+        bottom: 0,
+      },
+    });
+    
+    // Add indicators
+    const ema21Series = chart.addLineSeries({
+      color: '#2196F3',
+      lineWidth: 2,
+      priceLineVisible: false,
+    });
+    
+    const ema50Series = chart.addSeries({
+      type: 'Line' as const,
+      color: '#FF9800',
+      lineWidth: 2,
+      priceLineVisible: false,
+    });
+    
+    // Set data
+    if (historicalDataRef.current.prices['1h'] && historicalDataRef.current.prices['1h'].length > 0) {
+      const data = historicalDataRef.current.prices['1h'];
+      const chartData = data.map((candle: any[]) => ({
+      
+      candleSeries.setData(chartData);
+      
+      const volumeData = data.map((candle: any[]) => ({
+        time: candle[0] / 1000,
+        value: parseFloat(candle[5]),
+        color: parseFloat(candle[4]) >= parseFloat(candle[1]) ? 'rgba(76, 175, 80, 0.5)' : 'rgba(255, 82, 82, 0.5)'
+      }));
+      
+      volumeSeries.setData(volumeData);
+      
+      // Calculate and set indicator data
+      const closePrices = data.map((candle: any[]) => parseFloat(candle[4]));
+      const times = data.map((candle: any[]) => candle[0] / 1000);
+      
+      // EMA data
+      const ema21Data = [];
+      const ema50Data = [];
+      
+      for (let i = 0; i < closePrices.length; i++) {
+        if (i >= 21) {
+          const ema21 = calculateEMA(closePrices.slice(0, i + 1), 21);
+          ema21Data.push({ time: times[i], value: ema21 });
+        }
+        
+        if (i >= 50) {
+          const ema50 = calculateEMA(closePrices.slice(0, i + 1), 50);
+          ema50Data.push({ time: times[i], value: ema50 });
+        }
+      }
+      
+      ema21Series.setData(ema21Data);
+      ema50Series.setData(ema50Data);
+      
+      // Bollinger Bands data
+      const bbUpperData = [];
+      const bbMiddleData = [];
+      const bbLowerData = [];
+      
+      for (let i = 19; i < closePrices.length; i++) {
+        const bb = calculateBollingerBands(closePrices.slice(0, i + 1));
+        bbUpperData.push({ time: times[i], value: bb.upper });
+        bbMiddleData.push({ time: times[i], value: bb.middle });
+        bbLowerData.push({ time: times[i], value: bb.lower });
+      }
+      
+      // Create Bollinger Bands series if they don't exist
+      const bbUpperSeries = chart.addSeries({
+        type: 'Line' as const,
+        color: 'rgba(76, 175, 80, 0.5)',
+        lineWidth: 1,
+        priceLineVisible: false,
+      });
+      
+      const bbMiddleSeries = chart.addSeries({
+        type: 'Line' as const,
+        color: 'rgba(255, 255, 255, 0.5)',
+        lineWidth: 1,
+        priceLineVisible: false,
+      });
+      
+      const bbLowerSeries = chart.addSeries({
+        type: 'Line' as const,
+        color: 'rgba(255, 82, 82, 0.5)',
+        lineWidth: 1,
+        priceLineVisible: false,
+      });
+      
+      bbUpperSeries.setData(bbUpperData);
+      bbMiddleSeries.setData(bbMiddleData);
+      bbLowerSeries.setData(bbLowerData);
+    }
+    
+    // Resize handler
+    const handleResize = () => {
+      if (fullscreenChartContainerRef.current) {
+        chart.applyOptions({
+          width: fullscreenChartContainerRef.current.clientWidth,
+          height: fullscreenChartContainerRef.current.clientHeight,
+        });
+      }
+    };
+    
+    window.addEventListener('resize', handleResize);
+    
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      chart.remove();
+    }
+  }, [theme, showFullscreenChart]);
+  // Watchlist state
+  const [watchlist, setWatchlist] = useState<string[]>([]);
+  
+  // Load watchlist from localStorage
+  useEffect(() => {
+    const savedWatchlist = localStorage.getItem('watchlist');
+    if (savedWatchlist) {
+      setWatchlist(JSON.parse(savedWatchlist));
+    }
+  }, []);
+  
+  // Watchlist functions
+  const addToWatchlist = (symbol: string) => {
+    if (!watchlist.includes(symbol)) {
+      const updated = [...watchlist, symbol];
+      setWatchlist(updated);
+      localStorage.setItem('watchlist', JSON.stringify(updated));
+    }
+  };
+  
+  const removeFromWatchlist = (symbol: string) => {
+    const updated = watchlist.filter((s: string) => s !== symbol);
+    setWatchlist(updated);
+    localStorage.setItem('watchlist', JSON.stringify(updated));
+  };
+
+export default TradingSignal;
