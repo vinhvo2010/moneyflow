@@ -6,6 +6,7 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  -webkit-text-size-adjust: 100%; /* Ngăn iOS tự động thay đổi font-size */
 }
 
 /* Root Variables with responsive font sizes */
@@ -34,6 +35,26 @@
   --font-size-lg: 16px;
   --font-size-xl: 18px;
   --font-size-xxl: 22px;
+}
+
+/* Responsive variables for small mobile */
+@media (max-width: 400px) {
+  :root {
+    --border-radius-sm: 3px;
+    --border-radius-md: 4px;
+    --border-radius-lg: 6px;
+    --border-radius-xl: 8px;
+    --spacing-xs: 2px;
+    --spacing-sm: 4px;
+    --spacing-md: 8px;
+    --spacing-lg: 12px;
+    --font-size-xs: 9px;
+    --font-size-sm: 11px;
+    --font-size-md: 13px;
+    --font-size-lg: 15px;
+    --font-size-xl: 16px;
+    --font-size-xxl: 18px;
+  }
 }
 
 /* Responsive variables for tablet */
@@ -92,6 +113,8 @@
   line-height: 1.5;
   letter-spacing: 0.2px;
   max-width: 95%;
+  overflow-x: hidden; /* Ngăn tràn ngang trên mobile */
+  word-wrap: break-word; /* Đảm bảo text dài sẽ tự wrap */
 }
 
 /* Responsive container sizes */
@@ -117,6 +140,7 @@
 .header {
   padding: var(--spacing-md);
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  overflow-x: auto; /* Cho phép scroll ngang nếu cần */
 }
 
 .headerContent {
@@ -124,6 +148,7 @@
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
+  gap: var(--spacing-sm); /* Thêm gap để tránh các phần tử dính vào nhau khi wrap */
 }
 
 .headerLeft {
@@ -248,6 +273,7 @@
   background-color: var(--color-bg-secondary);
   flex-wrap: wrap;
   gap: var(--spacing-sm);
+  overflow-x: auto; /* Cho phép scroll ngang nếu cần */
 }
 
 @media (min-width: 640px) {
@@ -260,7 +286,15 @@
 .selectorLeft {
   display: flex;
   align-items: center;
-  gap: var(--spacing-lg);
+  gap: var(--spacing-md); /* Giảm gap trên mobile */
+  flex-wrap: wrap; /* Cho phép wrap trên màn hình nhỏ */
+}
+
+@media (min-width: 640px) {
+  .selectorLeft {
+    gap: var(--spacing-lg);
+    flex-wrap: nowrap;
+  }
 }
 
 .symbolSelector {
@@ -268,7 +302,7 @@
   color: var(--color-text-primary);
   border: none;
   border-radius: var(--border-radius-md);
-  padding: var(--spacing-sm) var(--spacing-lg);
+  padding: var(--spacing-xs) var(--spacing-md); /* Giảm padding trên mobile */
   font-size: var(--font-size-md);
   font-weight: 500;
   font-family: var(--font-primary);
@@ -277,73 +311,22 @@
   outline: none;
 }
 
-.signalTypeSelector {
-  display: flex;
-  overflow: hidden;
-  border-radius: var(--border-radius-md);
-  background-color: var(--color-bg-tertiary);
+@media (min-width: 640px) {
+  .symbolSelector {
+    padding: var(--spacing-sm) var(--spacing-lg);
+  }
 }
 
-.signalTypeButton {
-  padding: var(--spacing-sm) var(--spacing-lg);
-  font-size: var(--font-size-md);
-  font-weight: 600;
-  font-family: var(--font-primary);
-  border: none;
-  background-color: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: all 0.2s;
-  min-width: 100px;
-  text-align: center;
-}
+/* ... */
 
-.signalTypeLong {
-  background-color: #065f46;
-  color: var(--color-text-primary);
-  box-shadow: 0 0 14px rgba(16, 185, 129, 0.3);
-}
-
-.signalTypeShort {
-  background-color: #7f1d1d;
-  color: var(--color-text-primary);
-  box-shadow: 0 0 14px rgba(239, 68, 68, 0.3);
-}
-
-.confidenceBadge {
-  padding: 8px 16px;
-  border-radius: var(--border-radius-xl);
-  font-size: var(--font-size-md);
-  font-weight: 600;
-  font-family: var(--font-primary);
-  letter-spacing: 0.5px;
-}
-
-.confidenceHigh {
-  background-color: rgba(16, 185, 129, 0.2);
-  color: var(--color-accent-green);
-  border: 1px solid rgba(16, 185, 129, 0.3);
-}
-
-.confidenceMedium {
-  background-color: rgba(245, 158, 11, 0.2);
-  color: var(--color-accent-yellow);
-  border: 1px solid rgba(245, 158, 11, 0.3);
-}
-
-.confidenceLow {
-  background-color: rgba(239, 68, 68, 0.2);
-  color: var(--color-accent-red);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-}
-
-/* Price and Change */
-.priceBar {
+.dataRow {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: var(--spacing-lg);
+  padding: var(--spacing-xs) 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  flex-wrap: wrap; /* Cho phép wrap trên màn hình nhỏ */
+  gap: var(--spacing-xs);
 }
 
 .pairName {
@@ -353,764 +336,126 @@
   font-family: var(--font-primary);
 }
 
-.priceDisplay {
-  font-size: 32px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  font-family: var(--font-primary);
-  letter-spacing: -0.5px;
-}
+/* ... */
 
-.priceChange {
-  font-size: var(--font-size-lg);
-  font-weight: 500;
-  margin-left: var(--spacing-sm);
-  font-family: var(--font-primary);
-}
-
-.signalStrengthContainer {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-}
-
-.signalStrengthLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-xs);
-  font-family: var(--font-primary);
-}
-
-.signalStrengthBar {
-  width: 180px;
-  height: 8px;
-  background-color: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.signalStrengthFill {
-  height: 100%;
-  transition: width 0.3s ease;
-}
-
-.strengthHigh {
-  background: linear-gradient(90deg, #10b981, #059669);
-}
-
-.strengthMedium {
-  background: linear-gradient(90deg, #f59e0b, #d97706);
-}
-
-.strengthLow {
-  background: linear-gradient(90deg, #ef4444, #b91c1c);
-}
-
-/* Error Message */
-.errorMessage {
-  display: flex;
-  align-items: center;
-  background-color: rgba(239, 68, 68, 0.2);
-  color: #fca5a5;
-  padding: var(--spacing-md) var(--spacing-lg);
-  border-radius: var(--border-radius-lg);
-  margin: var(--spacing-lg);
-  font-size: var(--font-size-md);
-  font-family: var(--font-primary);
-}
-
-.errorIcon {
-  margin-right: var(--spacing-sm);
-  flex-shrink: 0;
-}
-
-/* Tab Navigation */
-.tabNav {
+.tabs {
   display: flex;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  padding: 0 var(--spacing-lg);
-  overflow-x: auto;
-  scrollbar-width: none; /* For Firefox */
+  margin-bottom: var(--spacing-md);
+  overflow-x: auto; /* Cho phép scroll ngang nếu cần */
+  -webkit-overflow-scrolling: touch; /* Smooth scrolling trên iOS */
 }
 
-.tabNav::-webkit-scrollbar {
-  display: none; /* For Chrome, Safari, and Opera */
-}
-
-.tabButton {
-  padding: var(--spacing-md) var(--spacing-lg);
-  font-size: var(--font-size-lg);
+.tab {
+  padding: var(--spacing-xs) var(--spacing-md); /* Giảm padding trên mobile */
+  font-size: var(--font-size-md);
   font-weight: 500;
-  font-family: var(--font-primary);
   color: var(--color-text-secondary);
-  background-color: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
+  background: none;
   cursor: pointer;
   transition: all 0.2s;
-  white-space: nowrap;
-  min-width: 120px;
-  text-align: center;
+  position: relative;
+  white-space: nowrap; /* Ngăn text bị wrap */
 }
 
-.tabButton:hover {
-  color: var(--color-text-primary);
+@media (min-width: 640px) {
+  .tab {
+    padding: var(--spacing-sm) var(--spacing-lg);
+  }
 }
 
-.activeTab {
-  color: var(--color-text-primary);
-  border-bottom: 3px solid var(--color-accent-blue);
-}
+/* ... */
 
-/* Main Content */
 .mainContent {
-  padding: var(--spacing-md);
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-md);
-}
-
-@media (min-width: 640px) {
-  .mainContent {
-    padding: var(--spacing-lg);
-    gap: var(--spacing-lg);
-  }
-}
-
-/* Tab Content */
-.tabContent {
   padding: var(--spacing-md);
-  overflow-y: auto;
-  flex: 1;
+  gap: var(--spacing-md);
+  overflow-x: hidden; /* Ngăn tràn ngang */
+  word-break: break-word; /* Đảm bảo text dài sẽ tự wrap */
+}
+
+/* ... */
+
+.dataGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); /* Giảm min-width cho grid items */
+  gap: var(--spacing-sm); /* Giảm gap trên mobile */
 }
 
 @media (min-width: 640px) {
-  .tabContent {
-    padding: var(--spacing-lg);
+  .dataGrid {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--spacing-md);
   }
 }
 
-/* Section Styles */
+/* ... */
+
 .section {
-  margin-bottom: var(--spacing-md);
   background-color: var(--color-bg-secondary);
-  border-radius: var(--border-radius-md);
-  overflow: hidden;
-  transition: box-shadow 0.3s;
-}
-
-@media (min-width: 640px) {
-  .section {
-    margin-bottom: var(--spacing-lg);
-    border-radius: var(--border-radius-lg);
-  }
-}
-
-.section:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-}
-
-.sectionHeader {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: var(--spacing-md) var(--spacing-lg);
-  cursor: pointer;
-}
-
-.sectionTitle {
-  display: flex;
-  align-items: center;
-}
-
-.sectionTitleSimple {
-  display: flex;
-  align-items: center;
-  padding: var(--spacing-md) var(--spacing-lg);
-}
-
-.sectionIcon {
-  margin-right: var(--spacing-sm);
-  color: var(--color-accent-blue);
-  width: 20px;
-  height: 20px;
-}
-
-.sectionHeading {
-  font-size: var(--font-size-lg);
-  font-weight: 600;
-  margin: 0;
-  font-family: var(--font-primary);
-}
-
-.chevron {
-  transition: transform 0.2s;
-  width: 20px;
-  height: 20px;
-}
-
-.chevronUp {
-  transform: rotate(180deg);
-}
-
-.sectionBody {
-  padding: 0 var(--spacing-lg) var(--spacing-lg) var(--spacing-lg);
-}
-
-/* Levels Grid */
-.levelsGrid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--spacing-md);
+  border-radius: var(--border-radius-lg);
+  padding: var(--spacing-md);
   margin-bottom: var(--spacing-md);
+  overflow-x: auto; /* Cho phép scroll ngang nếu cần */
+  -webkit-overflow-scrolling: touch; /* Smooth scrolling trên iOS */
 }
 
-.levelItem {
-  background-color: var(--color-bg-tertiary);
-  padding: var(--spacing-md);
-  border-radius: var(--border-radius-md);
-  transition: transform 0.2s;
-}
-
-.levelItem:hover {
-  transform: translateY(-2px);
-}
-
-.levelLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-xs);
-  font-family: var(--font-primary);
-}
-
-.levelValue {
-  font-size: var(--font-size-lg);
-  font-weight: 500;
-  font-family: var(--font-primary);
-}
-
-.riskReward {
-  display: flex;
-  align-items: center;
-  margin-top: var(--spacing-md);
-  padding: var(--spacing-sm);
-  background-color: var(--color-bg-tertiary);
-  border-radius: var(--border-radius-md);
-}
-
-.riskRewardLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  margin-right: var(--spacing-sm);
-  font-family: var(--font-primary);
-}
-
-/* Market Data Grid */
-.marketDataGrid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--spacing-md);
-}
-
-.marketDataItem {
-  background-color: var(--color-bg-tertiary);
-  padding: var(--spacing-md);
-  border-radius: var(--border-radius-md);
-  transition: transform 0.2s;
-}
-
-.marketDataItem:hover {
-  transform: translateY(-2px);
-}
-
-.marketDataLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-xs);
-  font-family: var(--font-primary);
-}
-
-.marketDataValue {
-  font-size: var(--font-size-lg);
-  font-weight: 500;
-  font-family: var(--font-primary);
-}
-
-/* Summary Box */
-.summaryBox {
-  background-color: var(--color-bg-tertiary);
-  padding: var(--spacing-lg);
-  border-radius: var(--border-radius-md);
-  font-size: var(--font-size-md);
-  line-height: 1.6;
-  font-family: var(--font-primary);
-}
-
-/* Quick Stats */
-.quickStats {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--spacing-md);
-  margin-bottom: var(--spacing-lg);
-}
-
-.statBox {
-  background-color: var(--color-bg-tertiary);
-  padding: var(--spacing-md);
-  border-radius: var(--border-radius-md);
-  transition: transform 0.2s;
-}
-
-.statBox:hover {
-  transform: translateY(-2px);
-}
-
-.statLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-xs);
-  font-family: var(--font-primary);
-}
-
-.statValue {
-  font-size: var(--font-size-lg);
-  font-weight: 500;
-  display: flex;
-  align-items: center;
-  font-family: var(--font-primary);
-}
-
-.statSubtext {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  margin-left: var(--spacing-xs);
-  font-family: var(--font-primary);
-}
-
-/* Technical Indicators */
-.indicatorGroup {
-  margin-bottom: var(--spacing-lg);
-}
-
-.indicatorLabel {
-  font-size: var(--font-size-lg);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-sm);
-  font-family: var(--font-primary);
-  font-weight: 500;
-}
+/* ... */
 
 .timeframeGrid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: var(--spacing-md);
+  grid-template-columns: repeat(auto-fit, minmax(50px, 1fr)); /* Responsive grid */
+  gap: var(--spacing-xs); /* Giảm gap trên mobile */
+  margin-top: var(--spacing-sm);
+  overflow-x: auto; /* Cho phép scroll ngang nếu cần */
 }
 
-.timeframeItem {
-  text-align: center;
-  background-color: var(--color-bg-tertiary);
-  padding: var(--spacing-sm);
-  border-radius: var(--border-radius-md);
-  transition: transform 0.2s;
+@media (min-width: 640px) {
+  .timeframeGrid {
+    grid-template-columns: repeat(5, 1fr);
+    gap: var(--spacing-sm);
+  }
 }
 
-.timeframeItem:hover {
-  transform: translateY(-2px);
-}
-
-.timeframeLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-xs);
-  font-family: var(--font-primary);
-}
-
-.timeframeValue {
-  font-size: var(--font-size-lg);
-  font-weight: 500;
-  font-family: var(--font-primary);
-}
-
-.macdGrid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--spacing-md);
-}
-
-.macdItem {
-  text-align: center;
-  background-color: var(--color-bg-tertiary);
-  padding: var(--spacing-md);
-  border-radius: var(--border-radius-md);
-  transition: transform 0.2s;
-}
-
-.macdItem:hover {
-  transform: translateY(-2px);
-}
-
-.macdLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-xs);
-  font-family: var(--font-primary);
-}
-
-.macdValue {
-  font-size: var(--font-size-lg);
-  font-weight: 500;
-  font-family: var(--font-primary);
-}
-
-.bbGrid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--spacing-md);
-}
-
-.bbItem {
-  text-align: center;
-  background-color: var(--color-bg-tertiary);
-  padding: var(--spacing-md);
-  border-radius: var(--border-radius-md);
-  transition: transform 0.2s;
-}
-
-.bbItem:hover {
-  transform: translateY(-2px);
-}
-
-.bbLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-xs);
-  font-family: var(--font-primary);
-}
-
-.bbValue {
-  font-size: var(--font-size-lg);
-  font-weight: 500;
-  font-family: var(--font-primary);
-}
-
-.indicatorRow {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--spacing-md);
-  padding: var(--spacing-md);
-  background-color: var(--color-bg-tertiary);
-  border-radius: var(--border-radius-md);
-}
-
-.indicatorRowLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  font-family: var(--font-primary);
-}
-
-.indicatorRowValue {
-  font-size: var(--font-size-lg);
-  font-weight: 500;
-  font-family: var(--font-primary);
-}
-
-.trendGrid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-md);
-}
-
-.trendItem {
-  display: flex;
-  align-items: center;
-  background-color: var(--color-bg-tertiary);
-  border-radius: var(--border-radius-md);
-  padding: var(--spacing-sm) var(--spacing-md);
-  transition: transform 0.2s;
-}
-
-.trendItem:hover {
-  transform: translateY(-2px);
-}
-
-.trendTimeframe {
-  font-size: var(--font-size-md);
-  margin-right: var(--spacing-sm);
-  font-family: var(--font-primary);
-  font-weight: 500;
-}
-
-.trendIndicator {
-  display: flex;
-  align-items: center;
-}
-
-/* Support/Resistance */
-.srGrid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--spacing-md);
-  padding: 0 var(--spacing-lg) var(--spacing-lg);
-}
-
-.srItem {
-  background-color: var(--color-bg-tertiary);
-  padding: var(--spacing-md);
-  border-radius: var(--border-radius-md);
-  transition: transform 0.2s;
-}
-
-.srItem:hover {
-  transform: translateY(-2px);
-}
-
-.srLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-xs);
-  font-family: var(--font-primary);
-}
-
-.srValue {
-  font-size: var(--font-size-lg);
-  font-weight: 500;
-  font-family: var(--font-primary);
-}
-
-/* Price Position */
-.pricePositionContainer {
-  padding: 0 var(--spacing-lg) var(--spacing-lg);
-}
-
-.pricePositionBar {
-  position: relative;
-  height: 12px;
-  background: linear-gradient(90deg, rgba(239, 68, 68, 0.5), rgba(16, 185, 129, 0.5));
-  border-radius: 6px;
-  margin: var(--spacing-lg) 0 var(--spacing-sm);
-}
-
-.pricePositionLabels {
-  display: flex;
-  justify-content: space-between;
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  font-family: var(--font-primary);
-}
-
-.pricePositionMarker {
-  position: absolute;
-  width: 18px;
-  height: 18px;
-  background-color: var(--color-text-primary);
-  border-radius: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  box-shadow: 0 0 12px rgba(255, 255, 255, 0.6);
-}
-
-/* Order Flow */
-.orderFlowGrid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--spacing-md);
-  margin-bottom: var(--spacing-md);
-}
-
-.orderFlowItem {
-  background-color: var(--color-bg-tertiary);
-  padding: var(--spacing-md);
-  border-radius: var(--border-radius-md);
-  transition: transform 0.2s;
-}
-
-.orderFlowItem:hover {
-  transform: translateY(-2px);
-}
-
-.orderFlowLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-xs);
-  font-family: var(--font-primary);
-}
-
-.orderFlowValue {
-  font-size: var(--font-size-lg);
-  font-weight: 500;
-  font-family: var(--font-primary);
-}
-
-.liquidationsContainer {
-  background-color: var(--color-bg-tertiary);
-  padding: var(--spacing-md) var(--spacing-lg);
-  border-radius: var(--border-radius-md);
-}
-
-.liquidationsLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-sm);
-  font-family: var(--font-primary);
-  font-weight: 500;
-}
-
-.liquidationsValues {
-  display: flex;
-  justify-content: space-around;
-}
-
-.liquidationItem {
-  display: flex;
-  align-items: center;
-}
-
-.liquidationLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  margin-right: var(--spacing-sm);
-  font-family: var(--font-primary);
-}
-
-/* Funding Rate */
-.fundingRateContainer {
-  padding: 0 var(--spacing-lg) var(--spacing-lg);
-}
-
-.fundingRateGrid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--spacing-md);
-  margin-bottom: var(--spacing-md);
-}
-
-.fundingRateItem {
-  background-color: var(--color-bg-tertiary);
-  padding: var(--spacing-md);
-  border-radius: var(--border-radius-md);
-  transition: transform 0.2s;
-}
-
-.fundingRateItem:hover {
-  transform: translateY(-2px);
-}
-
-.fundingRateLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  margin-bottom: var(--spacing-xs);
-  font-family: var(--font-primary);
-}
-
-.fundingRateValue {
-  font-size: var(--font-size-lg);
-  font-weight: 500;
-  font-family: var(--font-primary);
-}
-
-.fundingRateNote {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  font-style: italic;
-  font-family: var(--font-primary);
-  padding: var(--spacing-sm);
-  background-color: rgba(255, 255, 255, 0.03);
-  border-radius: var(--border-radius-md);
-}
-
-/* Timing */
-.timingContainer {
-  padding: 0 var(--spacing-lg) var(--spacing-lg);
-}
-
-.timingRow {
-  display: flex;
-  justify-content: space-between;
-  padding: var(--spacing-md) var(--spacing-lg);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  background-color: var(--color-bg-tertiary);
-  border-radius: var(--border-radius-md);
-  margin-bottom: var(--spacing-sm);
-}
-
-.timingRow:last-child {
-  margin-bottom: 0;
-}
-
-.timingLabel {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  font-family: var(--font-primary);
-}
-
-.timingValue {
-  font-size: var(--font-size-md);
-  font-family: var(--font-primary);
-  font-weight: 500;
-}
-
-/* Footer */
-.footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: var(--spacing-md) var(--spacing-lg);
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  background-color: rgba(0, 0, 0, 0.2);
-}
-
-.footerText {
-  font-size: var(--font-size-md);
-  color: var(--color-text-secondary);
-  font-family: var(--font-primary);
-}
+/* ... */
 
 .chartButton {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  background: linear-gradient(to right, #3b82f6, #2563eb);
-  color: white;
+  justify-content: center;
+  gap: var(--spacing-xs); /* Giảm gap trên mobile */
+  padding: var(--spacing-xs) var(--spacing-md); /* Giảm padding trên mobile */
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
   border: none;
   border-radius: var(--border-radius-md);
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm); /* Giảm font-size trên mobile */
   font-weight: 500;
-  font-family: var(--font-primary);
   cursor: pointer;
   transition: all 0.2s;
 }
 
-.chartButton:hover {
-  background: linear-gradient(to right, #2563eb, #1d4ed8);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
+@media (min-width: 640px) {
+  .chartButton {
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-lg);
+    font-size: var(--font-size-md);
+  }
 }
 
-.chartButton:active {
-  transform: translateY(0);
-}
+/* ... */
 
-.chartButtonIcon {
-  flex-shrink: 0;
-  width: 18px;
-  height: 18px;
-}
-
-/* Disclaimer (tiếp tục) */
 .disclaimer {
-  font-size: var(--font-size-sm);
-  color: #6b7280;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
   text-align: center;
-  padding: var(--spacing-sm) var(--spacing-lg) var(--spacing-lg);
-  font-style: italic;
-  font-family: var(--font-primary);
-  line-height: 1.5;
+  padding: var(--spacing-md);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  word-wrap: break-word; /* Đảm bảo text dài sẽ tự wrap */
 }
 
-/* Text Colors */
 .textGreen {
   color: var(--color-accent-green);
   font-weight: 500;
@@ -1472,6 +817,24 @@ button {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* iOS Safari specific fixes */
+@supports (-webkit-touch-callout: none) {
+  /* CSS specific to iOS devices */
+  .container {
+    -webkit-overflow-scrolling: touch; /* Smooth scrolling trên iOS */
+  }
+  
+  /* Fix cho vấn đề 100vh trên iOS Safari */
+  .container {
+    height: -webkit-fill-available;
+  }
+  
+  /* Fix cho vấn đề input zoom trên iOS */
+  input, select, textarea {
+    font-size: 16px; /* Ngăn iOS tự động zoom vào input */
   }
 }
 

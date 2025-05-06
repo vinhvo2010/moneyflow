@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
+  base: '/moneyflow/',
   server: {
     // Specify a fixed port to prevent 'undefined' port issues
     port: 5173,
