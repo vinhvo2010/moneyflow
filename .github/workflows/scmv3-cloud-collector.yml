@@ -1,6 +1,11 @@
 name: SCMv3 Cloud Collector
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/scmv3-cloud-collector.yml"
+      - "scripts/scmv3_cloud_persist.py"
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
