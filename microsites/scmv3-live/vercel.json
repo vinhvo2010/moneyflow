@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["sin1"],
+  "functions": {
+    "api/snapshot.js": {
+      "regions": ["sin1"],
+      "maxDuration": 15
+    }
+  }
+}
