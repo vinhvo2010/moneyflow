@@ -1,0 +1,79 @@
+name: SCMv3 Cloud Collector
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scmv3-cloud-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Checkout control plane
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Prepare compact data worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          DATA_DIR="$RUNNER_TEMP/scmv3-data"
+          if git ls-remote --exit-code --heads origin scmv3-data >/dev/null 2>&1; then
+            git fetch --depth=1 origin scmv3-data
+            git worktree add --detach "$DATA_DIR" FETCH_HEAD
+          else
+            git worktree add --detach "$DATA_DIR" HEAD
+          fi
+          find "$DATA_DIR" -mindepth 1 -maxdepth 1 \
+            ! -name ".git" ! -name "cloud-data" -exec rm -rf {} +
+          echo "DATA_DIR=$DATA_DIR" >> "$GITHUB_ENV"
+
+      - name: Fetch SCMv3 snapshot from Singapore
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            --retry 3 --retry-delay 2 \
+            -H "Cache-Control: no-cache" \
+            "https://scmv3-online-monitor.vercel.app/api/snapshot?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            -o "$RUNNER_TEMP/scmv3-snapshot.json"
+          python - <<'PY'
+          import json, os
+          p = os.path.join(os.environ["RUNNER_TEMP"], "scmv3-snapshot.json")
+          x = json.load(open(p))
+          assert x["execution_enabled"] is False
+          assert x["symbol"] == "ENAUSDT"
+          assert x["data_tier"] == "CLOUD_5M_SNAPSHOT"
+          assert x["quality"]["source_ok"] >= 7, x["quality"]
+          print(x["fetched_at_utc"], x["quality"])
+          PY
+
+      - name: Persist latest, 24h window and 31-day history
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/scmv3_cloud_persist.py \
+            --snapshot "$RUNNER_TEMP/scmv3-snapshot.json" \
+            --out "$DATA_DIR/cloud-data" \
+            --retention-days 31
+
+      - name: Publish one-commit data branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$DATA_DIR"
+          git config user.name "SCMv3 Cloud Collector"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          tree="$(git write-tree)"
+          commit="$(printf 'data: SCMv3 cloud snapshot %s\n' "$(date -u +%FT%TZ)" | git commit-tree "$tree")"
+          git push --force origin "$commit:refs/heads/scmv3-data"
